@@ -1,0 +1,8 @@
+
+.env
+*.pem
+*.key
+cosign.key
+__pycache__/
+.venv/
+*.pyc
