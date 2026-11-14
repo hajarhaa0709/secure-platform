@@ -28,7 +28,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # 3. Scanner le code source
-      - name: Scan source with Trivy
+      - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@0.24.0
         with:
           scan-type: fs
@@ -49,7 +49,7 @@ jobs:
       # 5. Scanner l'image
       - name: Scan Docker image
         if: success()
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: secure-app:latest
           scan-type: image
