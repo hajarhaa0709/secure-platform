@@ -9,18 +9,17 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   security:
     runs-on: ubuntu-latest
-    env:
-      TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2
-      TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Show repository layout
+        run: ls -R | head -50
 
       - name: Scan source with Trivy
         uses: aquasecurity/trivy-action@0.28.0
@@ -34,7 +33,10 @@ jobs:
           format: table
 
       - name: Build Docker image
-        run: docker build -t secure-app:latest -f app/Dockerfile app/
+        run: |
+          DOCKERFILE=$(find . -type f -name Dockerfile -path "*/app/*" | head -1)
+          echo "Using $DOCKERFILE"
+          docker build -t secure-app:latest -f "$DOCKERFILE" "$(dirname "$DOCKERFILE")"
 
       - name: Scan Docker image
         uses: aquasecurity/trivy-action@0.28.0
