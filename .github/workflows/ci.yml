@@ -28,7 +28,7 @@ jobs:
 
       # 3. Scanner le code source
       - name: Scan source with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0
         with:
           scan-type: fs
           scan-ref: .
@@ -48,7 +48,7 @@ jobs:
       # 5. Scanner l'image
       - name: Scan Docker image
         if: success()
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0
         with:
           image-ref: secure-app:latest
           scan-type: image
