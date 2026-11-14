@@ -1,0 +1,136 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan-source:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - name: Trivy code source (dependances, secrets, Dockerfile)
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          skip-dirs: alternatives,preuves
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: json
+          output: trivy-source.json
+      - name: Conserver le rapport
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: rapport-trivy-source
+          path: trivy-source.json
+
+  build-scan-publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: docker/setup-buildx-action@v3.10.0
+
+      - name: Construire l'image avec Buildx
+        uses: docker/build-push-action@v6.15.0
+        with:
+          context: app
+          file: app/Dockerfile
+          load: true
+          push: false
+          tags: secure-app:ci
+
+      - name: Trivy rapport complet (non bloquant, pour la comparaison)
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: secure-app:ci
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: "0"
+          format: json
+          output: trivy-image-all.json
+
+      - name: Clair demarrer base, registre local et Clair
+        continue-on-error: true
+        run: |
+          docker run -d --name clair-db --network host -e POSTGRES_USER=clair -e POSTGRES_PASSWORD=clair -e POSTGRES_DB=clair postgres:16.4-alpine
+          docker run -d --name registry --network host registry:2.8.3
+          until docker exec clair-db pg_isready -U clair; do sleep 2; done
+          docker run -d --name clair --network host -e CLAIR_MODE=combo -e CLAIR_CONF=/config/config.yaml -v "$PWD/.github/clair/config.yaml:/config/config.yaml:ro" quay.io/projectquay/clair:4.7.4
+          sleep 90
+
+      - name: Clair analyser l'image avec clairctl
+        continue-on-error: true
+        run: |
+          docker tag secure-app:ci localhost:5000/secure-app:ci
+          docker push localhost:5000/secure-app:ci
+          curl -sSL -o clairctl https://github.com/quay/clair/releases/download/v4.7.4/clairctl-linux-amd64
+          chmod +x clairctl
+          ./clairctl report --host http://localhost:6060 --out json localhost:5000/secure-app:ci > clair-report.json
+
+      - name: Comparaison Trivy et Clair
+        if: always()
+        run: |
+          {
+            echo "## Comparaison Trivy et Clair"
+            echo ""
+            echo "| Severite | Trivy | Clair |"
+            echo "|---|---|---|"
+            for s in CRITICAL HIGH MEDIUM LOW UNKNOWN; do
+              t=$(jq --arg s "$s" '[.Results[]?.Vulnerabilities[]? | select(.Severity==$s)] | length' trivy-image-all.json)
+              if [ -s clair-report.json ]; then
+                c=$(jq --arg s "$s" '[.vulnerabilities[]? | select((.normalized_severity|ascii_upcase)==$s)] | length' clair-report.json)
+              else
+                c="n/a"
+              fi
+              echo "| $s | $t | $c |"
+            done
+          } | tee comparaison.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Trivy blocage si faille CRITICAL ou HIGH corrigeable
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: secure-app:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: Conserver les rapports
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: rapports-image
+          path: |
+            trivy-image-all.json
+            clair-report.json
+            comparaison.md
+          if-no-files-found: ignore
+
+      - name: Connexion a GHCR
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'schedule'
+        uses: docker/login-action@v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publier l'image sur GHCR
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'schedule'
+        run: |
+          IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/secure-app
+          docker tag secure-app:ci "$IMAGE:${GITHUB_SHA::7}"
+          docker tag secure-app:ci "$IMAGE:latest"
+          docker push --all-tags "$IMAGE"
