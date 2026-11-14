@@ -26,9 +26,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 3. Scanner le code source
-      - name: Scan source with Trivy
-        uses: aquasecurity/trivy-action@0
+      # 3a. Rapport JSON du code source (ne bloque pas)
+      - name: Scan source with Trivy (JSON report)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 0
+          format: json
+          output: trivy-source.json
+
+      # 3b. Scan lisible dans les logs (bloque si HIGH/CRITICAL)
+      - name: Scan source with Trivy (gate)
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
           scan-ref: .
@@ -36,27 +49,38 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1
-          format: json
-          output: trivy-source.json
+          format: table
 
       # 4. Construire l'image Docker
       - name: Build Docker image
-        if: always()
+        if: success()
         run: |
           docker build -t secure-app:latest -f app/Dockerfile app/
 
-      # 5. Scanner l'image
-      - name: Scan Docker image
+      # 5a. Rapport JSON de l'image (ne bloque pas)
+      - name: Scan Docker image (JSON report)
         if: success()
-        uses: aquasecurity/trivy-action@0
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: secure-app:latest
+          scan-type: image
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: 0
+          format: json
+          output: trivy-image.json
+
+      # 5b. Scan lisible de l'image (bloque si HIGH/CRITICAL)
+      - name: Scan Docker image (gate)
+        if: success()
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: secure-app:latest
           scan-type: image
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: 1
-          format: json
-          output: trivy-image.json
+          format: table
 
       # 6. Enregistrer les rapports
       - name: Upload security reports
